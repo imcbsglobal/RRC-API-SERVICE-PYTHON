@@ -70,7 +70,6 @@ DATABASES = {
     }
 }
 
-# OPTIMIZED REST Framework configuration
 REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
@@ -78,9 +77,7 @@ REST_FRAMEWORK = {
     'DEFAULT_PARSER_CLASSES': [
         'rest_framework.parsers.JSONParser',
     ],
-    # We handle pagination manually for better performance
-    'DEFAULT_PAGINATION_CLASS': None,
-    'PAGE_SIZE': 1000,
+    # Removed pagination settings
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle'
@@ -90,6 +87,7 @@ REST_FRAMEWORK = {
         'user': '2000/hour'
     }
 }
+
 
 # OPTIMIZED Caching Configuration - Use Redis for production
 CACHES = {
