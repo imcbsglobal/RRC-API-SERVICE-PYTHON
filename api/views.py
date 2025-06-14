@@ -1,4 +1,4 @@
-# views.py - OPTIMIZED VERSION
+# views.py - FIXED VERSION
 import json
 import logging
 from datetime import datetime, timedelta
@@ -219,10 +219,10 @@ class GetClientsView(APIView):
     def get(self, request):
         start_time = datetime.now()
         try:
-            # Get query parameters
+            # Get query parameters - FIXED DEFAULT PAGE_SIZE
             page = int(request.GET.get('page', 1))
-            # Max 5000 records per page
-            page_size = min(int(request.GET.get('page_size', 1000)), 5000)
+            # Default to 50, max 5000 records per page
+            page_size = min(int(request.GET.get('page_size', 50)), 5000)
             search = request.GET.get('search', '').strip()
 
             # Check cache first
@@ -382,7 +382,7 @@ class RefreshCacheView(APIView):
 
 
 class SyncStatusView(APIView):
-    """Get current sync status and statistics"""
+    """Get current sync status and statistics - FIXED VERSION"""
 
     def get(self, request):
         try:
@@ -393,7 +393,83 @@ class SyncStatusView(APIView):
                 cursor.execute('SELECT COUNT(*) FROM "rrc_clients"')
                 total_records = cursor.fetchone()[0]
 
+            # Get table size and basic info
+            table_info = self._get_table_info()
+            
             # Get cache info
+            cache_info = self._get_cache_info()
+
+            # Get database performance stats
+            db_stats = self._get_database_stats()
+
+            end_time = datetime.now()
+            query_time = (end_time - start_time).total_seconds()
+
+            return Response({
+                'success': True,
+                'database': {
+                    'total_records': total_records,
+                    'table_info': table_info,
+                    'performance_stats': db_stats
+                },
+                'cache': cache_info,
+                'api_performance': {
+                    'query_duration_seconds': round(query_time, 3),
+                    'timestamp': datetime.now().isoformat()
+                },
+                'system_info': {
+                    'django_debug': settings.DEBUG,
+                    'database_engine': connection.vendor,
+                    'cache_backend': getattr(settings, 'CACHES', {}).get('default', {}).get('BACKEND', 'Unknown')
+                }
+            })
+
+        except Exception as e:
+            logger.error(f"Status check error: {str(e)}")
+            return Response({
+                'success': False,
+                'error': f'Status check failed: {str(e)}',
+                'timestamp': datetime.now().isoformat()
+            }, status=500)
+
+    def _get_table_info(self):
+        """Get table information and size"""
+        try:
+            with connection.cursor() as cursor:
+                # Get table size
+                cursor.execute("""
+                    SELECT 
+                        pg_size_pretty(pg_total_relation_size('rrc_clients')) as table_size,
+                        pg_size_pretty(pg_relation_size('rrc_clients')) as data_size,
+                        pg_size_pretty(pg_total_relation_size('rrc_clients') - pg_relation_size('rrc_clients')) as index_size
+                """)
+                
+                size_info = cursor.fetchone()
+                
+                # Get column count
+                cursor.execute("""
+                    SELECT COUNT(*) 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'rrc_clients'
+                """)
+                column_count = cursor.fetchone()[0]
+
+                return {
+                    'table_size': size_info[0] if size_info else 'Unknown',
+                    'data_size': size_info[1] if size_info else 'Unknown',
+                    'index_size': size_info[2] if size_info else 'Unknown',
+                    'column_count': column_count
+                }
+
+        except Exception as e:
+            logger.error(f"Error getting table info: {str(e)}")
+            return {
+                'error': f'Could not get table info: {str(e)}'
+            }
+
+    def _get_cache_info(self):
+        """Get cache information"""
+        try:
             cached_data = cache.get('rrc_clients_data')
             last_updated = cache.get('rrc_clients_last_updated')
 
@@ -404,44 +480,140 @@ class SyncStatusView(APIView):
                 cache_age = datetime.now() - last_updated
                 cache_age_minutes = int(cache_age.total_seconds() / 60)
 
-            # Get database performance info
+            cache_duration_minutes = getattr(settings, 'CLIENT_DATA_CACHE_MINUTES', 30)
+
+            return {
+                'status': cache_status,
+                'age_minutes': cache_age_minutes,
+                'expires_in_minutes': max(0, cache_duration_minutes - cache_age_minutes) if last_updated else 0,
+                'last_updated': last_updated.isoformat() if last_updated else None,
+                'cache_duration_setting': cache_duration_minutes
+            }
+
+        except Exception as e:
+            return {
+                'error': f'Could not get cache info: {str(e)}'
+            }
+
+    def _get_database_stats(self):
+        """Get database performance statistics - FIXED VERSION"""
+        try:
             with connection.cursor() as cursor:
+                # Fixed query - use relname instead of tablename
                 cursor.execute("""
                     SELECT 
                         schemaname, 
-                        tablename,
+                        relname as table_name,
                         n_tup_ins as inserts,
                         n_tup_upd as updates,
-                        n_tup_del as deletes
+                        n_tup_del as deletes,
+                        n_tup_hot_upd as hot_updates,
+                        seq_scan as sequential_scans,
+                        seq_tup_read as sequential_tuples_read,
+                        idx_scan as index_scans,
+                        idx_tup_fetch as index_tuples_fetched
                     FROM pg_stat_user_tables 
-                    WHERE tablename = 'rrc_clients'
+                    WHERE relname = 'rrc_clients'
                 """)
 
                 stats = cursor.fetchone()
-                db_stats = {}
                 if stats:
-                    db_stats = {
-                        'inserts': stats[2],
-                        'updates': stats[3],
-                        'deletes': stats[4]
+                    return {
+                        'schema': stats[0],
+                        'table_name': stats[1],
+                        'operations': {
+                            'inserts': stats[2] or 0,
+                            'updates': stats[3] or 0,
+                            'deletes': stats[4] or 0,
+                            'hot_updates': stats[5] or 0
+                        },
+                        'scan_stats': {
+                            'sequential_scans': stats[6] or 0,
+                            'sequential_tuples_read': stats[7] or 0,
+                            'index_scans': stats[8] or 0,
+                            'index_tuples_fetched': stats[9] or 0
+                        }
+                    }
+                else:
+                    return {
+                        'error': 'No statistics found for rrc_clients table'
                     }
 
+        except Exception as e:
+            logger.error(f"Error getting database stats: {str(e)}")
+            return {
+                'error': f'Could not get database stats: {str(e)}'
+            }
+
+
+# NEW: Get all data without pagination (for when you need everything)
+class GetAllClientsView(APIView):
+    """Get ALL client data without pagination - use carefully!"""
+
+    def get(self, request):
+        start_time = datetime.now()
+        try:
+            search = request.GET.get('search', '').strip()
+            
+            logger.info("Fetching ALL client data from database")
+            
+            with connection.cursor() as cursor:
+                # Base query
+                base_query = '''
+                    SELECT 
+                        "code", "name", "address", "branch", "district", "state",
+                        "software", "mobile", "installationdate", "priorty",
+                        "directdealing", "rout", "amc", "amcamt", "accountcode",
+                        "address3", "lictype", "clients", "sp", "nature"
+                    FROM "rrc_clients"
+                '''
+                
+                params = []
+                if search:
+                    base_query += '''WHERE "name" ILIKE %s 
+                                   OR "code" ILIKE %s 
+                                   OR "district" ILIKE %s'''
+                    search_param = f'%{search}%'
+                    params = [search_param, search_param, search_param]
+                
+                base_query += ' ORDER BY "name"'
+                
+                cursor.execute(base_query, params)
+                columns = [col[0] for col in cursor.description]
+
+                results = []
+                for row in cursor.fetchall():
+                    record = {}
+                    for i, value in enumerate(row):
+                        column_name = columns[i]
+                        if value and column_name in ['installationdate']:
+                            if hasattr(value, 'isoformat'):
+                                record[column_name] = value.isoformat()
+                            else:
+                                record[column_name] = str(value)
+                        elif value is None:
+                            record[column_name] = None
+                        else:
+                            record[column_name] = value
+                    results.append(record)
+
             end_time = datetime.now()
-            query_time = (end_time - start_time).total_seconds()
+            duration = (end_time - start_time).total_seconds()
 
             return Response({
                 'success': True,
-                'database_records': total_records,
-                'cache_status': cache_status,
-                'cache_age_minutes': cache_age_minutes,
-                'last_cache_update': last_updated.isoformat() if last_updated else None,
-                'database_stats': db_stats,
-                'query_duration_seconds': round(query_time, 3),
-                'timestamp': datetime.now().isoformat()
+                'data': results,
+                'total_records': len(results),
+                'search_applied': bool(search),
+                'search_term': search if search else None,
+                'query_duration_seconds': round(duration, 3),
+                'timestamp': datetime.now().isoformat(),
+                'warning': 'This endpoint returns ALL data - use pagination for better performance'
             })
 
         except Exception as e:
+            logger.error(f"Error fetching all clients: {str(e)}")
             return Response({
                 'success': False,
-                'error': f'Status check failed: {str(e)}'
+                'error': f'Failed to fetch all clients: {str(e)}'
             }, status=500)
