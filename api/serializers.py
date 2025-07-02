@@ -41,3 +41,30 @@ class RRCClientSerializer(serializers.Serializer):
     sp = serializers.IntegerField(required=False, allow_null=True)
     nature = serializers.CharField(
         required=False, allow_null=True, allow_blank=True)
+
+
+class AccProductSerializer(serializers.Serializer):
+    code = serializers.CharField(required=True, allow_blank=False)
+    name = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    catagory = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    unit = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    taxcode = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    company = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    product = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    brand = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    text6 = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+
+
+class AccMasterSerializer(serializers.Serializer):
+    code = serializers.CharField(required=True, allow_blank=False)
+    name = serializers.CharField(required=True, allow_blank=False)
+    super_code = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    opening_balance = serializers.DecimalField(
+        max_digits=12, decimal_places=3, required=False, allow_null=True)
+    debit = serializers.DecimalField(
+        max_digits=16, decimal_places=3, required=False, allow_null=True)
+    credit = serializers.DecimalField(
+        max_digits=16, decimal_places=3, required=False, allow_null=True)
+    place = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    phone2 = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    openingdepartment = serializers.CharField(required=False, allow_null=True, allow_blank=True)
