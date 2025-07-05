@@ -512,7 +512,7 @@ class GetAllClientsView(APIView):
 # =============================================================================
 
 class GetMasterView(APIView):
-    """Optimized master account data retrieval with enhanced caching"""
+    """Optimized master account data retrieval with enhanced caching - Balance > 0 only"""
 
     def get(self, request):
         start_time = datetime.now()
@@ -522,8 +522,8 @@ class GetMasterView(APIView):
             search = request.GET.get('search', '').strip()
 
             # Enhanced cache strategy
-            cache_key = f'acc_master_v2_p{page}_s{page_size}_{hash(search)}'
-            last_updated_key = 'acc_master_last_updated_v2'
+            cache_key = f'acc_master_v2_p{page}_s{page_size}_{hash(search)}_balance_gt_0'
+            last_updated_key = 'acc_master_last_updated_v2_balance_gt_0'
 
             cached_data = cache.get(cache_key)
             last_updated = cache.get(last_updated_key)
@@ -537,7 +537,7 @@ class GetMasterView(APIView):
                 cache_valid = cache_age < timedelta(minutes=cache_duration_minutes)
 
             if cache_valid:
-                logger.info(f"Returning cached master data (page {page})")
+                logger.info(f"Returning cached master data (page {page}) - Balance > 0")
                 response_data = cached_data.copy()
                 response_data.update({
                     'from_cache': True,
@@ -546,7 +546,7 @@ class GetMasterView(APIView):
                 return Response(response_data)
 
             # Fetch fresh data with optimizations
-            logger.info(f"Fetching optimized master data from database (page {page})")
+            logger.info(f"Fetching optimized master data from database (page {page}) - Balance > 0")
             result = self._fetch_master_optimized(page, page_size, search)
 
             # Cache the data
@@ -562,7 +562,8 @@ class GetMasterView(APIView):
                 'from_cache': False,
                 'next_refresh_in_minutes': cache_duration_minutes,
                 'query_duration_seconds': round(duration, 3),
-                'optimization': 'ENHANCED'
+                'optimization': 'ENHANCED',
+                'filter_applied': 'Balance > 0'
             })
 
             return Response(result)
@@ -575,11 +576,11 @@ class GetMasterView(APIView):
             }, status=500)
 
     def _fetch_master_optimized(self, page, page_size, search):
-        """Optimized master account data fetching with better SQL"""
+        """Optimized master account data fetching with better SQL - Balance > 0 only"""
         try:
             with connection.cursor() as cursor:
-                # Use prepared statements and optimized queries
-                base_where = '1=1'
+                # Base WHERE clause with balance > 0 condition
+                base_where = '(COALESCE("opening_balance", 0) + COALESCE("debit", 0) - COALESCE("credit", 0)) > 0'
                 params = []
 
                 if search:
@@ -587,17 +588,18 @@ class GetMasterView(APIView):
                     search_param = f'%{search}%'
                     params.extend([search_param, search_param, search_param])
 
-                # Optimized count query
+                # Optimized count query with balance filter
                 count_query = f'SELECT COUNT(*) FROM "acc_master" WHERE {base_where}'
                 cursor.execute(count_query, params)
                 total_records = cursor.fetchone()[0]
 
-                # Optimized data query with explicit column selection
+                # Optimized data query with explicit column selection + BALANCE CALCULATION + BALANCE FILTER
                 offset = (page - 1) * page_size
                 data_query = f'''
                     SELECT 
                         "code", "name", "super_code", "opening_balance", "debit", 
-                        "credit", "place", "phone2", "openingdepartment"
+                        "credit", "place", "phone2", "openingdepartment",
+                        (COALESCE("opening_balance", 0) + COALESCE("debit", 0) - COALESCE("credit", 0)) AS balance
                     FROM "acc_master"
                     WHERE {base_where}
                     ORDER BY "name"
@@ -615,7 +617,7 @@ class GetMasterView(APIView):
                     record = dict(zip(columns, row))
                     
                     # Convert Decimal fields to float for JSON serialization
-                    decimal_fields = ['opening_balance', 'debit', 'credit']
+                    decimal_fields = ['opening_balance', 'debit', 'credit', 'balance']
                     for field in decimal_fields:
                         if record.get(field) is not None:
                             record[field] = float(record[field])
@@ -636,7 +638,11 @@ class GetMasterView(APIView):
                         'has_next': page < total_pages,
                         'has_previous': page > 1
                     },
-                    'records_on_page': len(results)
+                    'records_on_page': len(results),
+                    'filter_info': {
+                        'balance_filter': 'Only records with balance > 0',
+                        'calculation': 'opening_balance + debit - credit > 0'
+                    }
                 }
 
         except Exception as e:
@@ -645,32 +651,39 @@ class GetMasterView(APIView):
 
 
 class GetAllMasterView(APIView):
-    """Optimized all master accounts data retrieval"""
+    """Optimized all master accounts data retrieval - Balance > 0 only"""
 
     def get(self, request):
         start_time = datetime.now()
         try:
             search = request.GET.get('search', '').strip()
             
-            logger.info("Fetching ALL master account data from database (optimized)")
+            logger.info("Fetching ALL master account data from database (optimized) - Balance > 0")
             
             with connection.cursor() as cursor:
-                # Optimized query
+                # Base WHERE clause with balance > 0 condition
+                balance_condition = '(COALESCE("opening_balance", 0) + COALESCE("debit", 0) - COALESCE("credit", 0)) > 0'
+                
+                # Optimized query with balance filter
                 if search:
-                    query = '''
+                    query = f'''
                         SELECT "code", "name", "super_code", "opening_balance", "debit",
-                               "credit", "place", "phone2", "openingdepartment"
+                               "credit", "place", "phone2", "openingdepartment",
+                               (COALESCE("opening_balance", 0) + COALESCE("debit", 0) - COALESCE("credit", 0)) AS balance
                         FROM "acc_master"
-                        WHERE "name" ILIKE %s OR "code" ILIKE %s OR "place" ILIKE %s
+                        WHERE {balance_condition}
+                        AND ("name" ILIKE %s OR "code" ILIKE %s OR "place" ILIKE %s)
                         ORDER BY "name"
                     '''
                     search_param = f'%{search}%'
                     cursor.execute(query, [search_param, search_param, search_param])
                 else:
-                    query = '''
+                    query = f'''
                         SELECT "code", "name", "super_code", "opening_balance", "debit",
-                               "credit", "place", "phone2", "openingdepartment"
+                               "credit", "place", "phone2", "openingdepartment",
+                               (COALESCE("opening_balance", 0) + COALESCE("debit", 0) - COALESCE("credit", 0)) AS balance
                         FROM "acc_master"
+                        WHERE {balance_condition}
                         ORDER BY "name"
                     '''
                     cursor.execute(query)
@@ -683,7 +696,7 @@ class GetAllMasterView(APIView):
                     record = dict(zip(columns, row))
                     
                     # Convert Decimal fields to float for JSON serialization
-                    decimal_fields = ['opening_balance', 'debit', 'credit']
+                    decimal_fields = ['opening_balance', 'debit', 'credit', 'balance']
                     for field in decimal_fields:
                         if record.get(field) is not None:
                             record[field] = float(record[field])
@@ -702,7 +715,11 @@ class GetAllMasterView(APIView):
                 'query_duration_seconds': round(duration, 3),
                 'timestamp': datetime.now().isoformat(),
                 'optimization': 'ENHANCED',
-                'warning': 'This endpoint returns ALL data - use pagination for better performance'
+                'filter_info': {
+                    'balance_filter': 'Only records with balance > 0',
+                    'calculation': 'opening_balance + debit - credit > 0'
+                },
+                'warning': 'This endpoint returns ALL data with balance > 0 - use pagination for better performance'
             })
 
         except Exception as e:
@@ -711,7 +728,6 @@ class GetAllMasterView(APIView):
                 'success': False,
                 'error': f'Failed to fetch all master accounts: {str(e)}'
             }, status=500)
-
 
 # =============================================================================
 # OPTIMIZED PRODUCT APIs
